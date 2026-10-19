@@ -8,11 +8,11 @@
 #   TMAX_ZIP        TMax-15K tasks.zip (allenai/TMax-15K on the Hugging Face Hub); TMAX_SELECT
 #                   optionally names a JSON selection of task ids
 #   HF_CHECKPOINT   Hugging Face weights of the solver; REF_LOAD the same in torch_dist format
-#   PUBLIC_BASE_URL address under which sandboxes reach the Miles router
-#   POLICY_MODEL    served name of the policy in Miles (default "policy")
+#   PUBLIC_BASE_URL address under which sandboxes reach the training job's router
+#   POLICY_MODEL    served name of the policy (default "policy")
 #   AES_SOLVER_BASE_URL, AES_SOLVER_MODEL   the base solver, served, for calibrating the
 #                   initial AutoEnvScaling pool
-#   MILES_DIR, MEGATRON_DIR                 checked by `autoenvscaling train plan`
+#   MILES_DIR, MEGATRON_DIR                 Miles only; AES_TRAIN_BACKEND=verl trains with verl
 #   PROPOSERS       default "gpt-5.6-sol claude-opus-5"
 #   STEPS           solver updates per run (default 300, as in the paper's Exp 2 runs)
 #   INITIAL_ENVS    environments generated for the initial AutoEnvScaling pool (default 256)
@@ -34,7 +34,8 @@ SELECT=()
 if [[ -n "${TMAX_SELECT:-}" ]]; then SELECT=(--select "$TMAX_SELECT"); fi
 
 start_log "exp2_solver_rl/$SOLVER"
-require_env TMAX_ZIP HF_CHECKPOINT REF_LOAD PUBLIC_BASE_URL AES_SOLVER_BASE_URL AES_SOLVER_MODEL
+require_env TMAX_ZIP HF_CHECKPOINT PUBLIC_BASE_URL AES_SOLVER_BASE_URL AES_SOLVER_MODEL
+require_for_miles REF_LOAD
 N_STATIC="$(num_rollout "$CONFIG" "$STEPS" static)"
 N_FRONTIER="$(num_rollout "$CONFIG" "$STEPS" frontier)"
 
@@ -46,12 +47,12 @@ for pool in tmax/pool parents; do
       "$AES_RUN_DIR"/tmax-tasks/*
 done
 
-# 2. Tmax: solver RL on the static pool (Miles in the background, the loop in the foreground).
-miles_start "$PRESET" "$AES_RUN_DIR/tmax" "$N_STATIC" "${WEIGHTS[@]}"
+# 2. Tmax: solver RL on the static pool (the training job in the background, the loop in the foreground).
+train_start "$PRESET" "$AES_RUN_DIR/tmax" "$N_STATIC" "${WEIGHTS[@]}"
 aes run --config "$CONFIG" --mode static --pool-dir "$AES_RUN_DIR/tmax/pool" \
     --run-dir "$AES_RUN_DIR/tmax" --bridge-dir "$AES_RUN_DIR/tmax/bridge" --steps "$STEPS" \
     "${BRIDGE_ARGS[@]}"
-miles_wait
+train_wait
 
 # 3. AutoEnvScaling with each frontier proposer (fixed weights, evolving harness). The initial
 #    pool is one generation round from the Tmax parents; during training the proposer refills
@@ -69,11 +70,11 @@ for proposer in "${PROPOSERS[@]}"; do
         --pool-dir "$dir/pool" --out-dir "$dir/initial" --harness "$harness" \
         --model "$proposer" --assignments "$INITIAL_ENVS" --round-id initial \
         ${ablate[@]+"${ablate[@]}"}
-    miles_start "$PRESET" "$dir" "$N_FRONTIER" "${WEIGHTS[@]}"
+    train_start "$PRESET" "$dir" "$N_FRONTIER" "${WEIGHTS[@]}"
     aes run --config "$CONFIG" --mode frontier --pool-dir "$dir/pool" --run-dir "$dir" \
         --bridge-dir "$dir/bridge" --steps "$STEPS" --harness "$harness" --model "$proposer" \
         "${BRIDGE_ARGS[@]}" ${ablate[@]+"${ablate[@]}"}
-    miles_wait
+    train_wait
   done
 done
 

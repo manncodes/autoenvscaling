@@ -23,6 +23,7 @@ export AES_SOLVER_BASE_URL=... AES_SOLVER_MODEL=...     # base solver, for the i
 export MILES_DIR=... MEGATRON_DIR=...
 cmd/exp2_solver_rl/run.sh qwen3.5-9b                     # or qwen3.5-35b-a3b
 DRY_RUN=1 cmd/exp2_solver_rl/run.sh qwen3.5-35b-a3b
+# with verl instead of Miles: AES_TRAIN_BACKEND=verl, no *_REF/MILES_DIR (third_party/verl)
 ```
 
 ## Commands

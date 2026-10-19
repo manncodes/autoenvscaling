@@ -22,6 +22,7 @@ export COLD_START_HF=... COLD_START_REF=... PUBLIC_BASE_URL=... MILES_DIR=... ME
 export AES_PROPOSER_BASE_URL=... AES_SOLVER_BASE_URL=... AES_SOLVER_MODEL=...  # Cold-Start, served
 SEED_TASKS="tasks/*" TMAX_TASKS=pools/tmax15k cmd/exp3_self_play/run.sh
 DRY_RUN=1 cmd/exp3_self_play/run.sh
+# with verl instead of Miles: AES_TRAIN_BACKEND=verl, no *_REF/MILES_DIR (third_party/verl)
 ```
 
 ## Commands

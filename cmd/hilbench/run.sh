@@ -10,7 +10,7 @@
 #   HIL_SFT_ROWS     cold-start rows (messages / tools JSON lines) from asking trajectories
 #   BASE_HF, BASE_REF   Qwen3.6-35B-A3B weights (Hugging Face and torch_dist)
 #   EPISODES         episodes.jsonl files to score
-#   MILES_DIR, MEGATRON_DIR   checked by `autoenvscaling train plan`
+#   MILES_DIR, MEGATRON_DIR   Miles only; AES_TRAIN_BACKEND=verl trains with verl
 source "$(dirname "$0")/../common.sh"
 
 start_log hilbench
@@ -39,7 +39,7 @@ if [[ -n "${HIL_SFT_ROWS:-}" || "$DRY_RUN" == "1" ]]; then
   # learning rate are placeholders.
   TRAIN=(--preset cold-start --prompt-data "${HIL_SFT_ROWS:-<sft rows>}"
          --hf-checkpoint "${BASE_HF:-<base hf>}" --ref-load "${BASE_REF:-<base torch_dist>}"
-         --save "$AES_RUN_DIR/cold-start" --log "$AES_RUN_DIR/miles.log")
+         --save "$AES_RUN_DIR/cold-start" --log "$AES_RUN_DIR/$AES_TRAIN_BACKEND.log")
   aes train plan "${TRAIN[@]}"
   aes train run "${TRAIN[@]}"
 fi

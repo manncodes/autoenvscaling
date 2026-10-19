@@ -28,6 +28,10 @@ an author decision before the public release.
   Carry mode is tested offline only (fakes for Miles, the engines and the sandboxes); see
   `docs/partial-rollout.md` for what was verified against the final run and what still needs a
   live run.
+* The verl backend (`autoenvscaling/training/verl/`, verl v0.9.1): every preset composes and
+  passes verl's own config validation, and its trainer, agent loops, OpenAI front and recording
+  proxy were exercised against verl's code with fakes for the engines and sandboxes; no GPU run
+  yet (`third_party/verl/README.md`).
 
 ## Author decisions (recorded 29/09/2026)
 

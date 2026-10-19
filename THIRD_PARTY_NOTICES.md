@@ -24,6 +24,12 @@ components below; preserve their notices and licence files when redistributing m
 - License: Apache License 2.0
 - Not included: `third_party/miles/miles-autoenvscaling.patch` is a patch against that commit.
 
+## verl
+
+- Upstream: <https://github.com/verl-project/verl>, release `v0.9.1` (commit `1876b06`)
+- License: Apache License 2.0
+- Not included: `autoenvscaling/training/verl/` uses verl as an installed dependency, unmodified.
+
 ## HiL-Bench
 
 - Upstream: <https://github.com/hilbenchauthors/hil-bench>
@@ -36,5 +42,5 @@ components below; preserve their notices and licence files when redistributing m
   (ODC-BY); the dataset is not included.
 - Terminal-Bench 2.1 and 4.0 tasks are fetched from the Harbor registry at run time and are not
   included; their own licences and terms apply.
-- Harbor, Modal, Claude Code, Codex, Pi, PyTorch, Megatron-LM, SGLang, and model checkpoints are
-  external dependencies under their own licences and terms.
+- Harbor, Modal, Claude Code, Codex, Pi, PyTorch, Megatron-LM, SGLang, verl, and model checkpoints
+  are external dependencies under their own licences and terms.

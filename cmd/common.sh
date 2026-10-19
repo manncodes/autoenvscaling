@@ -12,7 +12,8 @@ PYTHON="${PYTHON:-$AES_ROOT/.venv/bin/python}"
 if [[ ! -x "$PYTHON" ]]; then PYTHON="$(command -v python3 || command -v python)"; fi
 DRY_RUN="${DRY_RUN:-0}"
 AES_CLI=("$PYTHON" -m autoenvscaling.cli)
-MILES_PIDS=()
+export AES_TRAIN_BACKEND="${AES_TRAIN_BACKEND:-miles}"   # or verl: `aes train` reads it
+TRAIN_PIDS=()
 
 start_log() {  # start_log <experiment name>
   local stamp
@@ -41,6 +42,10 @@ aes() {  # aes <command> [args...]: the package CLI (`autoenvscaling ...`)
   "${AES_CLI[@]}" "$@" 2>&1 | tee -a "$LOG"
 }
 
+require_for_miles() {  # require_for_miles VAR...: torch_dist weights; verl reads Hugging Face ones
+  if [[ "$AES_TRAIN_BACKEND" == "miles" ]]; then require_env "$@"; fi
+}
+
 not_in_release() {  # not_in_release <step> <what is missing>: say so and carry on
   echo "- $1: not in this release yet ($2)" | tee -a "$LOG"
 }
@@ -57,32 +62,33 @@ require_env() {  # require_env VAR...: fail early instead of producing a wall of
   if [[ "$DRY_RUN" != "1" && "$missing" == "1" ]]; then exit 2; fi
 }
 
-num_rollout() {  # num_rollout <config> <steps> <schedule mode>: Miles --num-rollout for a loop
+num_rollout() {  # num_rollout <config> <steps> <schedule mode>: `train --num-rollout` for a loop
   "${AES_CLI[@]}" schedule --config "$1" --steps "$2" --mode "$3" \
     | sed -n 's/.*--num-rollout): *//p'
 }
 
-miles_start() {  # miles_start <preset> <run dir> <num rollouts> [train args...]
-  # Checks the Miles job with `train plan` (stops the launcher if MILES_DIR, MEGATRON_DIR or a
-  # path is missing), then starts it in bridge mode in the background; the self-play loop that
-  # feeds it runs in the foreground. The job's own output goes to <run dir>/miles.log.
+train_start() {  # train_start <preset> <run dir> <num rollouts> [train args...]
+  # Checks the training job (Miles or verl, AES_TRAIN_BACKEND) with `train plan`, which stops the
+  # launcher if a backend setting or a path is missing, then starts it in bridge mode in the
+  # background; the self-play loop that feeds it runs in the foreground. The job's own output
+  # goes to <run dir>/<backend>.log.
   local preset="$1" dir="$2" n="$3"
   shift 3
   local args=(--preset "$preset" --bridge-dir "$dir/bridge" --save "$dir/checkpoints"
-              --num-rollout "$n" --log "$dir/miles.log" "$@")
+              --num-rollout "$n" --log "$dir/$AES_TRAIN_BACKEND.log" "$@")
   aes train plan "${args[@]}"
   echo "+ autoenvscaling train run ${args[*]} &" | tee -a "$LOG"
   trace train run "${args[@]}"
   if [[ "$DRY_RUN" == "1" ]]; then return 0; fi
   mkdir -p "$dir"
   "${AES_CLI[@]}" train run "${args[@]}" >>"$LOG" 2>&1 &
-  MILES_PIDS+=("$!")
+  TRAIN_PIDS+=("$!")
 }
 
-miles_wait() {  # wait for the Miles jobs started by miles_start
+train_wait() {  # wait for the training jobs started by train_start
   local pid
-  for pid in ${MILES_PIDS[@]+"${MILES_PIDS[@]}"}; do wait "$pid"; done
-  MILES_PIDS=()
+  for pid in ${TRAIN_PIDS[@]+"${TRAIN_PIDS[@]}"}; do wait "$pid"; done
+  TRAIN_PIDS=()
 }
 
 harness_for() {  # harness_for <model>: the coding agent each proposer runs in (Appendix D.2)

@@ -15,7 +15,9 @@ extras and never calls a model or starts a sandbox.
 Training runs pair a Miles job in bridge mode (`autoenvscaling train run --preset ...`) with the
 self-play loop (`aes run ...`), which runs every solver and proposer episode
 and hands Miles finished RL groups through a shared bridge directory. `aes
-schedule` gives the number of Miles updates (`--num-rollout`) for a run.
+schedule` gives the number of Miles updates (`--num-rollout`) for a run. With
+`AES_TRAIN_BACKEND=verl` every launcher trains with verl v0.9.1 instead, with the same presets and
+the same bridge ([third_party/verl/README.md](../third_party/verl/README.md)).
 
 Status legend: **from data** means the item renders from the released numbers; **runs** means
 the launcher runs the experiment with this release's commands (it costs sandboxes, tokens and,

@@ -12,6 +12,7 @@ export BASE_HF=... BASE_REF=... MILES_DIR=... MEGATRON_DIR=...
 export AES_PROPOSER_BASE_URL=... AES_PROPOSER_API_KEY=... AES_SOLVER_BASE_URL=... AES_SOLVER_MODEL=...
 SEED_TASKS="tasks/*" cmd/cold_start/run.sh
 DRY_RUN=1 cmd/cold_start/run.sh
+# with verl instead of Miles: AES_TRAIN_BACKEND=verl, no *_REF/MILES_DIR (third_party/verl)
 ```
 
 ## Commands

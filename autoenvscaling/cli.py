@@ -7,7 +7,7 @@
     schedule    print the training schedule                       (= selfplay schedule)
     run         run the self-play training loop                   (= selfplay run)
     selfplay    the same five steps under one command group
-    train       plan or launch Miles training jobs
+    train       plan or launch Miles or verl training jobs (--backend)
     export      proposer/solver trajectories to SFT rows or RL groups
     baselines   Prompt and Prompt + Env Feedback generation arms
     tmax        convert Tmax tasks to Harbor tasks
@@ -29,7 +29,7 @@ from pathlib import Path
 
 COMMANDS = {
     "selfplay": "autoenvscaling.selfplay.__main__",
-    "train": "autoenvscaling.training.miles.__main__",
+    "train": "autoenvscaling.training.__main__",
     "export": "autoenvscaling.trajectories.export",
     "baselines": "autoenvscaling.baselines.run",
     "tmax": "autoenvscaling.baselines.tmax",

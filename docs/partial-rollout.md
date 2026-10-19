@@ -298,3 +298,18 @@ batch filling and filtering with the cut, drain timeout, exhausted source, manif
 configuration), `tests/test_training_carry_proxy.py` (recording across turns and parks,
 rollback, gates, limits, the HTTP surface), `tests/test_training_carry_driver.py` (install,
 launch, park and rejoin, verification, release, orphan reaping).
+
+## 9. On verl
+
+The verl backend (`autoenvscaling/training/verl/`, `third_party/verl/README.md`) gets the same
+behaviour from verl v0.9.1's own V1 trainer instead of a rollout function: `colocate_async`
+aborts in-flight generations at the weight update and continues them under the new weights (Pi
+waits inside its request, as with the park gate), `algorithm.filter_groups` drops groups whose
+rewards do not vary and refills them, `trainer.v1.sampler.max_off_policy_threshold=5` drops a
+group admitted more than 4 updates before it would train, and `bypass_mode` trains on the
+engine's log-probabilities. The registry, the cut and the buffer reconciliation above have no
+counterpart there: an unfinished episode stays a running agent loop with its sandbox. The Pi
+install, the recording proxy, the terminal checks and the verifier contract are shared
+(`training/carry/driver.py`, `proxy.py`), and the differences in turn granularity, episode budget
+and restart are listed in `third_party/verl/README.md`.
+

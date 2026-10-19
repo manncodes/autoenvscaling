@@ -55,7 +55,7 @@ Qwen3.6-35B-A3B as both proposer and solver, Terminal-Bench 2.1 rises from 41.1 
 | Calibration | The current solver attempts the task 4 times (8 near a band edge); it is kept if the mean reward is in [0.25, 0.75] and the rewards vary. Failed tasks go back to the proposer, up to 2 revisions. | `autoenvscaling/calibration/` |
 | Rewards | Solver: fraction of tests passed. Proposer: -1 if validation fails, -0.25 if calibration fails, 1 if admitted. Advantages are centred per role. | `autoenvscaling/rewards.py` |
 | Pool and self-play | Admitted tasks form the solver's pool, reviewed every 16 solver updates. In self-play, one policy trains as solver every step and as proposer every 16 steps. | `autoenvscaling/pool.py`, `autoenvscaling/pipeline.py`, `autoenvscaling/selfplay/` |
-| Training | Miles (DPPO) with our patch; launchers and presets for every run in the paper. Carry mode restores the paper's partial rollout and over-sampling: unfinished episodes are parked across weight updates with their sampled tokens and log-probabilities ([docs/partial-rollout.md](docs/partial-rollout.md)). | `autoenvscaling/training/`, `third_party/miles/` |
+| Training | Miles (DPPO) with our patch, or verl v0.9.1 unmodified (`aes train --backend verl`); the same launchers and presets for every run in the paper. Carry mode restores the paper's partial rollout and over-sampling: unfinished episodes continue across weight updates with their sampled tokens and log-probabilities ([docs/partial-rollout.md](docs/partial-rollout.md), [third_party/verl](third_party/verl/README.md)). | `autoenvscaling/training/`, `third_party/` |
 | Evaluation | Terminal-Bench 2.1 and 4.0 (avg@5) and HiL-Bench, through Harbor. | `autoenvscaling/evals/` |
 
 Sandboxes run on [Modal](https://modal.com) by default: the proposer sandbox through the Modal
@@ -68,6 +68,7 @@ environment. A local Docker backend is available for development.
 git clone git@github.com:MSR-Orchard/AutoEnvScaling.git && cd AutoEnvScaling
 uv venv -p 3.12 && source .venv/bin/activate
 uv pip install -e ".[dev]"          # add ".[analysis]" to regenerate the paper figures
+                                    # training: Miles (third_party/miles) or verl (third_party/verl)
 modal token new                     # once, for the Modal sandbox backend
 cp .env.example .env                # fill in the keys your run needs
 ```
@@ -125,7 +126,7 @@ autoenvscaling/   the package: proposer, sandbox, validation, calibration, rewar
 skills/           the auto_env_scaling proposer skill and cross-domain references
 docker/proposer/  the proposer image and the tools available inside the sandbox
 rubrics/          the Terminal-Bench task-implementation rubric used by `harbor check`
-third_party/      the Miles patch and the upstream commit it applies to
+third_party/      the Miles patch and its upstream commit; the verl release the backend targets
 cmd/              one launcher per paper experiment
 analysis/, data/  scripts and data behind the paper's figures and tables
 tests/            unit tests (live tests need credentials: AES_LIVE_TESTS=1)
@@ -150,7 +151,8 @@ tests/            unit tests (live tests need credentials: AES_LIVE_TESTS=1)
 * Environments are Harbor tasks, built, run, and reviewed with the
   [Harbor](https://github.com/harbor-framework/harbor) framework; the proposer follows Harbor's
   `create-task` skill.
-* RL training uses [Miles](https://github.com/radixark/miles) with DPPO.
+* RL training uses [Miles](https://github.com/radixark/miles) with DPPO; the
+  [verl](https://github.com/verl-project/verl) backend runs the same recipes on verl's V1 trainer.
 * Sandboxes run on [Modal](https://modal.com).
 * The rubric review uses the [Terminal-Bench](https://github.com/harbor-framework/terminal-bench)
   task-implementation rubric, and the baseline pools follow Tmax.
