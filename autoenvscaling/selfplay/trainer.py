@@ -9,7 +9,7 @@ The loop owns the schedule, the pool and every rollout. A `Trainer` only does tw
 * `submit(handle, groups, role)` hands over one batch of RL groups (see
   `trajectories.export.RLGroup`) and triggers exactly one policy update.
 
-`autoenvscaling.training.miles.bridge.MilesBridgeTrainer` implements this for Miles.
+`autoenvscaling.training.bridge.BridgeTrainer` implements this for Miles and verl.
 `FixedEndpointTrainer` below serves a fixed endpoint and only records batches, for dry runs
 and for testing the orchestration against a static inference server.
 """

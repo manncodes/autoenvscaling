@@ -1,20 +1,19 @@
-"""A file handshake that lets the self-play loop drive a running Miles job.
+"""A file handshake that lets the self-play loop drive a running training job (Miles or verl).
 
-Miles owns its training loop: for each rollout id it calls the configured rollout function,
-trains one step on what that function returns, and pushes the new weights to its SGLang
-engines. In `bridge` mode the rollout function is `training.miles.rollout.generate_rollout`,
-which does not generate anything itself. It announces that the engines are awake with the
-latest weights and waits for the self-play loop to deliver a finished batch:
+The trainer owns its loop: for each update it announces that the inference engines are awake
+with the latest weights, waits for the self-play loop to deliver a finished batch, trains one
+step on it and pushes the new weights. Miles does this in `training.miles.rollout`, verl in
+`training.verl.bridge`; both speak the same protocol:
 
-    <control_dir>/ready_<id>.json    written by Miles: {"rollout_id", "router_url", "time"}
+    <control_dir>/ready_<id>.json    written by the trainer: {"rollout_id", "router_url", "time"}
     <control_dir>/batch_<id>.jsonl   written by the loop (atomically): RL sample rows
     <control_dir>/stop.json          written by the loop when it has nothing more to train
 
-While Miles waits, the loop runs solver attempts, pool reviews and proposer episodes against
-the router, so every rollout comes from exactly the weights it is trained against. The loop
-must not send requests after it writes a batch: Miles then moves the engines' memory to the
-trainer, and a request that reaches an engine in that state can crash the job (the patch in
-third_party/miles detaches engines from the router during that window).
+While the trainer waits, the loop runs solver attempts, pool reviews and proposer episodes
+against `router_url` (an OpenAI-compatible address), so every rollout comes from exactly the
+weights it is trained against. The loop must not send requests after it writes a batch: the
+trainer then moves the engines' memory to the optimizer step (the Miles patch detaches engines
+from the router during that window; verl pauses them, so a late request waits instead).
 
 `control_dir` must be on storage both processes can see.
 """
@@ -50,7 +49,7 @@ def batch_path(control_dir: Path, rollout_id: int) -> Path:
     return Path(control_dir) / f"batch_{rollout_id:06d}.jsonl"
 
 
-# ---- the Miles side (synchronous; runs inside Miles' rollout manager) --------------------------
+# ---- the trainer side (synchronous; runs inside the training job) ------------------------------
 def write_ready(control_dir: Path, rollout_id: int, router_url: str) -> None:
     path = ready_path(control_dir, rollout_id)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -76,7 +75,7 @@ def wait_for_batch(control_dir: Path, rollout_id: int, *, poll_s: float = 5.0,
 
 # ---- the loop side -------------------------------------------------------------------------------
 def pending_ready(control_dir: Path) -> list[int]:
-    """Rollout ids Miles is waiting on: announced, with no batch yet."""
+    """Rollout ids the trainer is waiting on: announced, with no batch yet."""
     out = []
     for path in Path(control_dir).glob("ready_*.json"):
         m = _READY_RE.match(path.name)
@@ -85,12 +84,12 @@ def pending_ready(control_dir: Path) -> list[int]:
     return sorted(out)
 
 
-class MilesBridgeTrainer:
+class BridgeTrainer:
     """`selfplay.trainer.Trainer` over the file handshake.
 
-    `public_base_url` is the address under which sandboxes reach the Miles router (for example
-    a tunnel); without it the router's own address is used, which works only when the sandboxes
-    share its network.
+    `public_base_url` is the address under which sandboxes reach the trainer's router (for
+    example a tunnel); without it the router's own address is used, which works only when the
+    sandboxes share its network.
     """
 
     def __init__(self, control_dir: Path, *, model: str = "policy", public_base_url: str | None = None,
@@ -122,7 +121,7 @@ class MilesBridgeTrainer:
                 self._outstanding = StepHandle(rollout_id, self._endpoint(info["router_url"]))
                 return self._outstanding
             if deadline is not None and time.monotonic() > deadline:
-                raise TimeoutError(f"Miles did not ask for a batch within {self.timeout_s}s")
+                raise TimeoutError(f"the trainer did not ask for a batch within {self.timeout_s}s")
             await asyncio.sleep(self.poll_s)
 
     async def submit(self, handle: StepHandle, groups: Sequence[RLGroup], *, role: str) -> None:
@@ -130,7 +129,7 @@ class MilesBridgeTrainer:
             raise RuntimeError(f"batch for rollout {handle.update_index} was not requested")
         rows = rl_sample_rows(groups)
         if not rows:
-            raise ValueError("refusing to send an empty batch; Miles cannot train on it")
+            raise ValueError("refusing to send an empty batch; the trainer cannot train on it")
         if any(row["role"] != role for row in rows):
             raise ValueError(f"batch mixes roles; expected only {role!r}")
         write_jsonl_atomic(batch_path(self.control_dir, handle.update_index), rows)

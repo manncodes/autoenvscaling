@@ -54,7 +54,7 @@ class ScriptedEngine:
         self.abort_once = abort_once
         self.version = 0
 
-    async def generate(self, input_ids, max_new, temperature):
+    async def generate(self, input_ids, max_new, temperature, session=None):
         self.calls.append((list(input_ids), max_new))
         if self.abort_once:
             self.abort_once = False
@@ -161,13 +161,13 @@ async def test_engine_abort_during_a_cut_retries_the_same_prompt_after_unpark():
     # the proxy waits for unpark and reissues the identical prompt.
     orig = engine.generate
 
-    async def aborting(input_ids, max_new, temperature):
+    async def aborting(input_ids, max_new, temperature, session=None):
         if engine.abort_once:
             proxy.gates.park()
             engine.abort_once = False
             asyncio.get_running_loop().call_later(0.02, proxy.gates.unpark)
             raise px.GenerationAborted("cut")
-        return await orig(input_ids, max_new, temperature)
+        return await orig(input_ids, max_new, temperature, session)
 
     engine.generate = aborting
     r = await chat()

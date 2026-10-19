@@ -3,8 +3,7 @@
     config.py     MilesConfig and presets; the paper's settings are the defaults
     launcher.py   command, environment and checkpoint discovery for a Miles job
     launch/       train.sh (inside the Miles container) and apptainer.sh (host wrapper)
-    bridge.py     file handshake between the self-play loop and a running Miles job
-    rollout.py    the Miles rollout function for bridge mode
+    rollout.py    the Miles rollout function for bridge mode (`training.bridge` handshake)
     hooks.py      the reward post-process: group-mean-centred advantages
 
 Carry mode (partial rollout and over-sampling, the paper's solver-training loop) lives in

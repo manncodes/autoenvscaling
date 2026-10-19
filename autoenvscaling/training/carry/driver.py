@@ -116,6 +116,126 @@ print(json.dumps({
 '''
 
 
+# ---- Pi in a sandbox: install, launch, terminal status, verification -----------------------------------
+# Shared with the verl agent loop (`training.verl.episode`), which runs the same episode straight
+# through: verl keeps Pi's request waiting across the weight update instead of parking it.
+def pi_models(base_url: str, model: str, *, context_window: int, max_tokens: int) -> dict:
+    """Pi's provider configuration: one OpenAI-compatible model served at `base_url`."""
+    return {"providers": {"openai": {
+        "baseUrl": base_url,
+        "api": "openai-completions", "apiKey": "$OPENAI_API_KEY", "authHeader": True,
+        "compat": {"supportsStore": False, "supportsDeveloperRole": False,
+                   "supportsReasoningEffort": False, "supportsUsageInStreaming": False,
+                   "maxTokensField": "max_tokens", "supportsStrictMode": False},
+        "models": [{"id": model, "name": "policy", "api": "openai-completions",
+                    "reasoning": True, "input": ["text"],
+                    "contextWindow": int(context_window), "maxTokens": int(max_tokens),
+                    "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}}]}}}
+
+
+async def install_pi(sandbox: Sandbox, package: str, models: dict, *, label: str = "") -> None:
+    """Install Pi as Harbor does (nvm, Node 22) and plant its provider configuration."""
+    for attempt in range(INSTALL_RETRIES):
+        probe = await sandbox.exec(
+            "bash", "-lc",
+            "command -v curl >/dev/null 2>&1 || (apt-get update -qq && apt-get install -y -qq "
+            "curl ca-certificates >/dev/null 2>&1); command -v curl", timeout_s=600)
+        if probe.returncode == 0:
+            break
+        logger.warning("[pi] curl unavailable (attempt %d/%d) for %s", attempt + 1, INSTALL_RETRIES, label)
+        await asyncio.sleep(2 ** attempt)
+    else:
+        raise RuntimeError(f"pi install failed: curl still missing after {INSTALL_RETRIES} attempts")
+    res = await sandbox.exec("bash", "-lc", _PI_BOOTSTRAP.format(package=package), timeout_s=1200)
+    if res.returncode != 0:
+        detail = (res.stderr or "").strip() or (res.stdout or "").strip()
+        raise RuntimeError(f"pi install failed (rc={res.returncode}): {detail[:300] or '<no output>'}")
+    await sandbox.write_file(f"{PI_CONFIG_DIR}/models.json", (json.dumps(models, indent=2) + "\n").encode("utf-8"))
+    # Fail loudly rather than fall back to api.openai.com, which would spend money and
+    # record nothing.
+    res = await sandbox.exec("bash", "-lc", f'grep -q "/v1/ep/" {PI_CONFIG_DIR}/models.json && echo PLANT_OK',
+                             timeout_s=120)
+    if "PLANT_OK" not in (res.stdout or ""):
+        raise RuntimeError(f"models.json plant failed: {res.stdout} {res.stderr}")
+
+
+def pi_launch(prompt_path: str, model: str) -> str:
+    """Pi, once, with the task on stdin: the task text never appears in a long-lived process's
+    argv (a task's own `pkill -f` could match it)."""
+    return (f"mkdir -p {SESSION_DIR}; . ~/.nvm/nvm.sh; "
+            f"{{ rm -f {shlex.quote(prompt_path)} || exit $?; "
+            f"pi --print --mode json --session-dir {SESSION_DIR} --provider openai "
+            f"--model {shlex.quote(model)} > {PI_OUTPUT} 2>&1; rc=$?; "
+            f"echo EXIT=$rc; exit $rc; }} < {shlex.quote(prompt_path)}")
+
+
+def pi_env(api_key: str) -> dict[str, str]:
+    return {"OPENAI_API_KEY": api_key or "proxy", "PI_CODING_AGENT_DIR": PI_CONFIG_DIR}
+
+
+async def pi_terminal_status(sandbox: Sandbox, timeout_s: float) -> dict:
+    """Pi's final session events, summarised inside the sandbox (only the summary leaves it)."""
+    result = await sandbox.exec("python3", "-I", "-c", _PI_COMPLETION_CHECK, timeout_s=int(timeout_s),
+                                workdir="/tmp")
+    if result.returncode or result.timed_out:
+        raise RuntimeError("could not validate Pi's final session events")
+    status = json.loads(result.stdout)
+    if (not isinstance(status.get("agent_ended"), bool)
+            or not isinstance(status.get("assistant_error"), bool)
+            or not isinstance(status.get("content_blocks"), int)
+            or status.get("stop_reason") not in ("stop", "length", "toolUse", "error", "aborted", "unknown")
+            or (status.get("http_status") is not None and not isinstance(status["http_status"], int))):
+        raise RuntimeError("invalid Pi terminal-status diagnostic")
+    return status
+
+
+def recording_failure(rec: dict | None) -> str | None:
+    """Why a finished episode's recording cannot be trained on, or None."""
+    if rec and rec.get("error"):
+        return f"proxy episode failed: {rec['error']}"
+    if rec is None or not rec.get("n_tokens"):
+        return "proxy recorded no tokens for this episode"
+    return None
+
+
+def terminal_failure(terminal: dict, rec: dict) -> str | None:
+    """Why Pi's ending makes the episode a failure rather than a reward, or None."""
+    bounded_stop = rec.get("stop_reason") in ("context_limit", "max_turns")
+    if (not terminal["agent_ended"] or terminal["assistant_error"]
+            or terminal["stop_reason"] not in ("stop", "length")
+            or (not terminal["content_blocks"] and not bounded_stop)):
+        return (f"Pi terminal status invalid (stop_reason={terminal['stop_reason']}, "
+                f"agent_ended={terminal['agent_ended']}, http_status={terminal['http_status']})")
+    if not rec.get("tool_results_seen"):
+        return "episode produced zero tool results"
+    return None
+
+
+async def run_verifier(sandbox: Sandbox, task_dir: str, *, workdir: str,
+                       remaining: Callable[[], float]) -> float:
+    """The task's `tests/test.sh` in the episode's container; `remaining()` bounds each call."""
+    tests = Path(task_dir) / "tests" if task_dir else None
+    if tests is None or not (tests / "test.sh").is_file():
+        raise RuntimeError("prompt row has no task_dir with tests/test.sh; cannot verify")
+    # Nothing from before this run may score it: the agent could have planted a reward file
+    # or a tests directory, and an earlier verifier attempt could have left one behind. Pi
+    # has exited by now, so after the reset only test.sh can write the reward.
+    fresh = await sandbox.exec("bash", "-lc", "rm -rf /tests /logs/verifier && mkdir -p /tests /logs/verifier",
+                               timeout_s=int(min(remaining(), 60)), workdir="/")
+    if fresh.returncode or fresh.timed_out:
+        raise RuntimeError(f"could not reset the verifier directories: {fresh.stderr or fresh.stdout}")
+    await sandbox.upload_dir(tests, "/tests")
+    res = await sandbox.exec(
+        "bash", "-lc", "bash /tests/test.sh > /logs/verifier/test-stdout.txt 2>&1; echo RC=$?; "
+                       "if [ -s /logs/verifier/reward.txt ]; then echo REWARD_TXT; cat /logs/verifier/reward.txt; "
+                       "elif [ -s /logs/verifier/reward.json ]; then echo REWARD_JSON; cat /logs/verifier/reward.json; "
+                       "else echo NO_REWARD; tail -c 2000 /logs/verifier/test-stdout.txt; fi",
+        timeout_s=int(remaining()), workdir=workdir)
+    if res.timed_out:
+        raise RuntimeError("verifier timed out")
+    return parse_reward_output(res.stdout or "")
+
+
 # ---- the proxy as seen from the driver ---------------------------------------------------------------
 class ProxyClient:
     """Control and recording endpoints of ``training.carry.proxy`` (synchronous; call off-loop)."""
@@ -365,7 +485,7 @@ class SandboxEpisodeDriver:
                                "trainer's loopback")
         self.public_url = settings.proxy_public_url.rstrip("/")
         self.max_turns = int(settings.max_turns)
-        self.pi_package = pi_package_spec(settings.pi_version or _default_pi_version(),
+        self.pi_package = pi_package_spec(settings.pi_version or default_pi_version(),
                                           getattr(settings, "pi_package", ""))
         if getattr(settings, "network", "allowlist") != "public" and getattr(self.backend, "name", "") == "docker":
             logger.warning("[pi] the Docker backend cannot enforce the solver allowlist; sandboxes "
@@ -578,48 +698,16 @@ class SandboxEpisodeDriver:
         if getattr(self.settings, "network", "allowlist") == "public":
             return None
         hosts = [h for h in (urlsplit(self.public_url).hostname,) if h]
-        hosts += list(_pi_install_hosts())
+        hosts += list(pi_install_hosts())
         hosts += task_allowed_hosts(meta.get("task_dir") or "")
         return sorted(dict.fromkeys(hosts))
 
     async def _install_pi(self, sb: CarrySandbox) -> None:
+        models = pi_models(f"{self.public_url}/v1/ep/{sb.episode_id}", self.settings.served_model,
+                           context_window=int(getattr(self.args, "rollout_max_context_len", 98304)),
+                           max_tokens=int(getattr(self.args, "rollout_max_response_len", 16384)))
         async with self._install_sem:
-            for attempt in range(INSTALL_RETRIES):
-                probe = await sb.sandbox.exec(
-                    "bash", "-lc",
-                    "command -v curl >/dev/null 2>&1 || (apt-get update -qq && apt-get install -y -qq "
-                    "curl ca-certificates >/dev/null 2>&1); command -v curl", timeout_s=600)
-                if probe.returncode == 0:
-                    break
-                logger.warning("[pi] curl unavailable (attempt %d/%d) for %s", attempt + 1,
-                               INSTALL_RETRIES, sb.episode_id)
-                await asyncio.sleep(2 ** attempt)
-            else:
-                raise RuntimeError(f"pi install failed: curl still missing after {INSTALL_RETRIES} attempts")
-            res = await sb.sandbox.exec("bash", "-lc", _PI_BOOTSTRAP.format(package=self.pi_package),
-                                        timeout_s=1200)
-        if res.returncode != 0:
-            detail = (res.stderr or "").strip() or (res.stdout or "").strip()
-            raise RuntimeError(f"pi install failed (rc={res.returncode}): {detail[:300] or '<no output>'}")
-        models = {"providers": {"openai": {
-            "baseUrl": f"{self.public_url}/v1/ep/{sb.episode_id}",
-            "api": "openai-completions", "apiKey": "$OPENAI_API_KEY", "authHeader": True,
-            "compat": {"supportsStore": False, "supportsDeveloperRole": False,
-                       "supportsReasoningEffort": False, "supportsUsageInStreaming": False,
-                       "maxTokensField": "max_tokens", "supportsStrictMode": False},
-            "models": [{"id": self.settings.served_model, "name": "policy", "api": "openai-completions",
-                        "reasoning": True, "input": ["text"],
-                        "contextWindow": int(getattr(self.args, "rollout_max_context_len", 98304)),
-                        "maxTokens": int(getattr(self.args, "rollout_max_response_len", 16384)),
-                        "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}}]}}}
-        await sb.sandbox.write_file(f"{PI_CONFIG_DIR}/models.json",
-                                    (json.dumps(models, indent=2) + "\n").encode("utf-8"))
-        # Fail loudly rather than fall back to api.openai.com, which would spend money and
-        # record nothing.
-        res = await sb.sandbox.exec("bash", "-lc", f'grep -q "/v1/ep/" {PI_CONFIG_DIR}/models.json && echo PLANT_OK',
-                                    timeout_s=120)
-        if "PLANT_OK" not in (res.stdout or ""):
-            raise RuntimeError(f"models.json plant failed: {res.stdout} {res.stderr}")
+            await install_pi(sb.sandbox, self.pi_package, models, label=sb.episode_id)
 
     # ---- turns ---------------------------------------------------------------------------------------
     async def run_turns(self, *, sample: Any, sandbox: CarrySandbox, turn_state: Any,
@@ -637,19 +725,11 @@ class SandboxEpisodeDriver:
 
         instruction = self._meta(sample).get("instruction") or _prompt_text(sample)
         prompt_path = f"/tmp/aes_pi_prompt_{sandbox.episode_id}.txt"
-        # The task text never appears in a long-lived process's argv (a task's own `pkill -f`
-        # could match it); it is staged in a file and read on stdin, Pi's native interface.
         await sandbox.sandbox.write_file(prompt_path, instruction.encode("utf-8"))
-        launch = (f"mkdir -p {SESSION_DIR}; . ~/.nvm/nvm.sh; "
-                  f"{{ rm -f {shlex.quote(prompt_path)} || exit $?; "
-                  f"pi --print --mode json --session-dir {SESSION_DIR} --provider openai "
-                  f"--model {shlex.quote(self.settings.served_model)} > {PI_OUTPUT} 2>&1; rc=$?; "
-                  f"echo EXIT=$rc; exit $rc; }} < {shlex.quote(prompt_path)}")
-        key = os.environ.get(self.settings.proxy_api_key_env, "") or "proxy"
         exec_timeout = int(sandbox.wall_remaining(self._timeout()))
         waiter = asyncio.create_task(sandbox.sandbox.exec(
-            "bash", "-lc", launch, timeout_s=exec_timeout,
-            env={"OPENAI_API_KEY": key, "PI_CODING_AGENT_DIR": PI_CONFIG_DIR}))
+            "bash", "-lc", pi_launch(prompt_path, self.settings.served_model), timeout_s=exec_timeout,
+            env=pi_env(os.environ.get(self.settings.proxy_api_key_env, ""))))
         sandbox.waiter = waiter
         parked = await self._await_pi(sandbox, should_abort, self._remaining(sandbox), waiter)
         return await self._finish(sample, sandbox, parked)
@@ -691,44 +771,22 @@ class SandboxEpisodeDriver:
             if rec and rec.get("n_tokens", 0) > rec.get("prompt_len", 0):
                 self._apply_recording(sample, rec)
             return TurnOutcome(TurnStatus.ABORTED, {"turn": turns}, turns)
-        if rec and rec.get("error"):
-            return TurnOutcome(TurnStatus.FAILED, {}, int(rec.get("turns") or 0),
-                               error=f"proxy episode failed: {rec['error']}")
-        if rec is None or not rec.get("n_tokens"):
-            return TurnOutcome(TurnStatus.FAILED, {"turn": 0}, 0,
-                               error="proxy recorded no tokens for this episode")
+        if failure := recording_failure(rec):
+            turns = int((rec or {}).get("turns") or 0)
+            return TurnOutcome(TurnStatus.FAILED, {"turn": turns}, turns, error=failure)
         terminal = await self._completion_status(sandbox)
         md = getattr(sample, "metadata", None)
         if md is None:
             sample.metadata = md = {}
         md["pi_terminal_status"] = terminal
-        bounded_stop = rec.get("stop_reason") in ("context_limit", "max_turns")
         turns = int(rec.get("turns") or 0)
-        if (not terminal["agent_ended"] or terminal["assistant_error"]
-                or terminal["stop_reason"] not in ("stop", "length")
-                or (not terminal["content_blocks"] and not bounded_stop)):
-            return TurnOutcome(TurnStatus.FAILED, {}, turns,
-                               error=f"Pi terminal status invalid (stop_reason={terminal['stop_reason']}, "
-                                     f"agent_ended={terminal['agent_ended']}, http_status={terminal['http_status']})")
-        if not rec.get("tool_results_seen"):
-            return TurnOutcome(TurnStatus.FAILED, {"turn": turns}, turns,
-                               error="episode produced zero tool results")
+        if failure := terminal_failure(terminal, rec):
+            return TurnOutcome(TurnStatus.FAILED, {"turn": turns}, turns, error=failure)
         self._apply_recording(sample, rec)
         return TurnOutcome(TurnStatus.DONE, {"turn": turns}, turns)
 
     async def _completion_status(self, sandbox: CarrySandbox) -> dict:
-        result = await sandbox.sandbox.exec("python3", "-I", "-c", _PI_COMPLETION_CHECK,
-                                            timeout_s=int(min(self._remaining(sandbox), 60.0)), workdir="/tmp")
-        if result.returncode or result.timed_out:
-            raise RuntimeError("could not validate Pi's final session events")
-        status = json.loads(result.stdout)
-        if (not isinstance(status.get("agent_ended"), bool)
-                or not isinstance(status.get("assistant_error"), bool)
-                or not isinstance(status.get("content_blocks"), int)
-                or status.get("stop_reason") not in ("stop", "length", "toolUse", "error", "aborted", "unknown")
-                or (status.get("http_status") is not None and not isinstance(status["http_status"], int))):
-            raise RuntimeError("invalid Pi terminal-status diagnostic")
-        return status
+        return await pi_terminal_status(sandbox.sandbox, min(self._remaining(sandbox), 60.0))
 
     def _apply_recording(self, sample: Any, rec: dict) -> None:
         """Copy the engine's own ids and log-probabilities onto the sample; nothing is recomputed."""
@@ -746,10 +804,6 @@ class SandboxEpisodeDriver:
                 logger.warning("[pi] sandbox release pending: %s", exc)
 
     async def _verify_inner(self, sample: Any, sandbox: CarrySandbox) -> float:
-        task_dir = self._meta(sample).get("task_dir") or ""
-        tests = Path(task_dir) / "tests"
-        if not task_dir or not (tests / "test.sh").is_file():
-            raise RuntimeError("prompt row has no task_dir with tests/test.sh; cannot verify")
         started = time.monotonic()
         budget = float(self.settings.verify_timeout_s)
 
@@ -759,23 +813,8 @@ class SandboxEpisodeDriver:
                 raise TimeoutError("verifier wall-clock budget exhausted")
             return left
 
-        # Nothing from before this run may score it: the agent could have planted a reward file
-        # or a tests directory, and an earlier verifier attempt could have left one behind. Pi
-        # has exited by now, so after the reset only test.sh can write the reward.
-        fresh = await sandbox.sandbox.exec("bash", "-lc", "rm -rf /tests /logs/verifier && mkdir -p /tests /logs/verifier",
-                                           timeout_s=int(min(remaining(), 60)), workdir="/")
-        if fresh.returncode or fresh.timed_out:
-            raise RuntimeError(f"could not reset the verifier directories: {fresh.stderr or fresh.stdout}")
-        await sandbox.sandbox.upload_dir(tests, "/tests")
-        res = await sandbox.sandbox.exec(
-            "bash", "-lc", "bash /tests/test.sh > /logs/verifier/test-stdout.txt 2>&1; echo RC=$?; "
-                           "if [ -s /logs/verifier/reward.txt ]; then echo REWARD_TXT; cat /logs/verifier/reward.txt; "
-                           "elif [ -s /logs/verifier/reward.json ]; then echo REWARD_JSON; cat /logs/verifier/reward.json; "
-                           "else echo NO_REWARD; tail -c 2000 /logs/verifier/test-stdout.txt; fi",
-            timeout_s=int(remaining()), workdir=self.settings.sandbox_workdir)
-        if res.timed_out:
-            raise RuntimeError("verifier timed out")
-        return parse_reward_output(res.stdout or "")
+        return await run_verifier(sandbox.sandbox, self._meta(sample).get("task_dir") or "",
+                                  workdir=self.settings.sandbox_workdir, remaining=remaining)
 
 
 # ---- helpers ------------------------------------------------------------------------------------------------
@@ -886,7 +925,7 @@ def pi_package_spec(version: str, package: str = "") -> str:
     return f"{package}@{version or 'latest'}"
 
 
-def _default_pi_version() -> str:
+def default_pi_version() -> str:
     try:
         from autoenvscaling.calibration.solver import PI_VERSION
         return PI_VERSION
@@ -894,7 +933,7 @@ def _default_pi_version() -> str:
         return "latest"
 
 
-def _pi_install_hosts() -> tuple[str, ...]:
+def pi_install_hosts() -> tuple[str, ...]:
     try:
         from autoenvscaling.calibration.solver import PI_INSTALL_HOSTS
         return tuple(PI_INSTALL_HOSTS)

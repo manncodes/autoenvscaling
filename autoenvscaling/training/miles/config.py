@@ -10,7 +10,7 @@
 rollouts come from:
 
 * `bridge` (default): the self-play loop in this package runs every solver and proposer episode
-  and hands Miles finished RL groups through `training.miles.bridge`. Miles only trains and
+  and hands Miles finished RL groups through `training.bridge`. Miles only trains and
   serves the current weights. Used for shared-policy training, frontier-proposer runs and
   static pools alike. Every episode of a batch finishes before the update.
 * `carry`: the paper's solver-training loop (`training.carry`). Miles samples environments from

@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from autoenvscaling.selfplay.schedule import Schedule
-from autoenvscaling.training.miles import bridge
+from autoenvscaling.training import bridge
 from autoenvscaling.training.miles import launcher as launcher_mod
 from autoenvscaling.training.miles.__main__ import main as miles_main
 from autoenvscaling.training.miles.config import (
@@ -168,7 +168,7 @@ def _groups(role="solver") -> list[RLGroup]:
 
 
 async def test_bridge_handshake(tmp_path):
-    trainer = bridge.MilesBridgeTrainer(tmp_path, model="policy", poll_s=0.01, timeout_s=5)
+    trainer = bridge.BridgeTrainer(tmp_path, model="policy", poll_s=0.01, timeout_s=5)
     received = {}
 
     def miles_side():
@@ -197,7 +197,7 @@ async def test_bridge_handshake(tmp_path):
 
 
 async def test_bridge_public_url_and_empty_batch(tmp_path):
-    trainer = bridge.MilesBridgeTrainer(tmp_path, public_base_url="https://tunnel.example/v1",
+    trainer = bridge.BridgeTrainer(tmp_path, public_base_url="https://tunnel.example/v1",
                                         poll_s=0.01, timeout_s=5)
     bridge.write_ready(tmp_path, 0, "http://router.invalid:3000")
     handle = await trainer.acquire()

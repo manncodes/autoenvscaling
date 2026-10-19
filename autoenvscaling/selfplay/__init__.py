@@ -2,7 +2,7 @@
 
 `schedule.Schedule` says when reviews, generation rounds and proposer updates happen,
 `loop.SelfPlayLoop` runs them, and `trainer.Trainer` is the small interface to whatever updates
-the weights (Miles in `autoenvscaling.training.miles.bridge`).
+the weights (Miles or verl, through `autoenvscaling.training.bridge`).
 """
 
 from autoenvscaling.selfplay.loop import FRONTIER, SHARED, STATIC, LoopConfig, SelfPlayLoop

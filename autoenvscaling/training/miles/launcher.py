@@ -17,11 +17,10 @@ import os
 import re
 import shlex
 import subprocess
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
-from autoenvscaling.training.miles.bridge import STOP_FILE
+from autoenvscaling.training import ConfigError, TrainingResult
+from autoenvscaling.training.bridge import STOP_FILE
 from autoenvscaling.training.miles.config import BRIDGE, CARRY, MilesConfig
 
 # Variables the carry's Ray workers read (training.carry.rollout.CarrySettings and the proxy key).
@@ -30,19 +29,6 @@ CARRY_ENV_PREFIXES = ("AES_CARRY_", "AES_PROXY_API_KEY")
 LAUNCH_DIR = Path(__file__).resolve().parent / "launch"
 REPO_ROOT = Path(__file__).resolve().parents[3]
 LATEST_FILE = "latest_checkpointed_iteration.txt"
-
-
-@dataclass
-class TrainingResult:
-    ok: bool
-    returncode: int
-    checkpoint: str | None
-    iteration: int | None
-    detail: dict[str, Any] = field(default_factory=dict)
-
-
-class ConfigError(ValueError):
-    """The configuration would fail or train something other than what it declares."""
 
 
 def latest_checkpoint(save_dir: Path) -> tuple[int, Path] | None:

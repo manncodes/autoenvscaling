@@ -282,7 +282,7 @@ def test_cli_seed_prompts_schedule(tmp_path, capsys):
     assert len(read_jsonl(tmp_path / "prompts.jsonl")) == 3
     capsys.readouterr()
     assert main(["schedule", "--steps", "32"]) == 0
-    assert "planned trainer updates (Miles --num-rollout): 33" in capsys.readouterr().out
+    assert "planned trainer updates (train --num-rollout): 33" in capsys.readouterr().out
     with pytest.raises(SystemExit):
         main(["run", "--pool-dir", str(tmp_path / "pool"), "--run-dir", str(tmp_path / "run")])
     with pytest.raises(SystemExit):

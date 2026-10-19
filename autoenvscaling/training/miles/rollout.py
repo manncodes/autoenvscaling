@@ -29,7 +29,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
-from autoenvscaling.training.miles import bridge
+from autoenvscaling.training import bridge
 
 logger = logging.getLogger(__name__)
 

@@ -349,7 +349,10 @@ class Generation:
 
 
 class Engine(Protocol):
-    async def generate(self, input_ids: list[int], max_new: int, temperature: float) -> Generation: ...
+    """`session` is the episode id: engines that route by it keep an episode on one replica."""
+
+    async def generate(self, input_ids: list[int], max_new: int, temperature: float,
+                       session: str | None = None) -> Generation: ...
 
 
 class Renderer(Protocol):
@@ -437,7 +440,8 @@ class MockEngine:
         self.renderer = renderer
         self.text = text or self.TEXT
 
-    async def generate(self, input_ids: list[int], max_new: int, temperature: float) -> Generation:
+    async def generate(self, input_ids: list[int], max_new: int, temperature: float,
+                       session: str | None = None) -> Generation:
         ids = self.renderer.encode(self.text)[:max_new]
         return Generation(ids, [-0.1] * len(ids), self.renderer.decode(ids), weight_version=0)
 
@@ -455,7 +459,8 @@ class SglangEngine:
                                     max_keepalive_connections=config.max_connections))
         self.client = client
 
-    async def generate(self, input_ids: list[int], max_new: int, temperature: float) -> Generation:
+    async def generate(self, input_ids: list[int], max_new: int, temperature: float,
+                       session: str | None = None) -> Generation:
         url = self.config.sglang_url.rstrip("/")
         if not url:
             raise ProxyError(503, "the proxy has no engine address yet; the driver pushes the "
@@ -652,7 +657,8 @@ class Proxy:
             async def issue():
                 if not self.gates.open_for(episode_id):   # queued before a cut, running after it
                     raise GenerationAborted("gate closed before dispatch")
-                return await self.engine.generate(input_ids, want, float(body.get("temperature", 1.0)))
+                return await self.engine.generate(input_ids, want, float(body.get("temperature", 1.0)),
+                                                  session=episode_id)
 
             task = asyncio.create_task(issue())
             self.gates.inflight.add(task)
@@ -853,8 +859,9 @@ def build_app(proxy: Proxy):
     return app
 
 
-def make_proxy(config: ProxyConfig, *, tokenizer: Any = None) -> Proxy:
-    """Build the proxy for the configured backend (loads the tokenizer from ``hf_dir`` if none given)."""
+def make_proxy(config: ProxyConfig, *, tokenizer: Any = None, engine: Engine | None = None) -> Proxy:
+    """Build the proxy for the configured backend (loads the tokenizer from ``hf_dir`` if none
+    given). An `engine` replaces the configured backend, e.g. verl's client (`training.verl.agent`)."""
     problems = config.problems()
     if problems:
         raise ValueError("; ".join(problems))
@@ -864,7 +871,7 @@ def make_proxy(config: ProxyConfig, *, tokenizer: Any = None) -> Proxy:
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(config.hf_dir, trust_remote_code=True)
     renderer = ChatTemplateRenderer(tokenizer)
-    engine: Engine = MockEngine(renderer) if config.backend == "mock" else SglangEngine(config)
+    engine = engine or (MockEngine(renderer) if config.backend == "mock" else SglangEngine(config))
     parser: ToolParser = SglangToolParser(config.tool_parser)
     proxy = Proxy(config, renderer=renderer, engine=engine, tool_parser=parser)
     proxy.restore_cache()

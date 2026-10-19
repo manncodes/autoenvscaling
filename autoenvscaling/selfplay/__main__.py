@@ -10,10 +10,10 @@
     # The active pool as Miles prompt rows (for generate_fn mode).
     python -m autoenvscaling.selfplay prompts --pool-dir runs/pool --out runs/pool/prompts.jsonl
 
-    # When reviews, rounds and proposer updates happen; the total is Miles' --num-rollout.
+    # When reviews, rounds and proposer updates happen; the total is `train --num-rollout`.
     python -m autoenvscaling.selfplay schedule --steps 288
 
-    # Train with Miles in bridge mode (start the Miles job with the same --bridge-dir).
+    # Train in bridge mode (start the Miles or verl job with the same --bridge-dir).
     python -m autoenvscaling.selfplay run --mode shared --pool-dir runs/pool \\
         --run-dir runs/rsi --bridge-dir runs/rsi/bridge --steps 288
 
@@ -77,7 +77,7 @@ def cmd_schedule(args: argparse.Namespace) -> int:
     for step, event in schedule.timeline():
         if event != "solver_update" or args.verbose:
             print(f"after solver step {step:4d}: {event}")
-    print(f"planned trainer updates (Miles --num-rollout): {schedule.planned_updates}")
+    print(f"planned trainer updates (train --num-rollout): {schedule.planned_updates}")
     return 0
 
 
@@ -120,9 +120,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         trainer = FixedEndpointTrainer(SolverEndpoint(args.fixed_endpoint, args.policy_model),
                                        Path(args.run_dir) / "batches")
     else:
-        from autoenvscaling.training.miles.bridge import MilesBridgeTrainer
-        trainer = MilesBridgeTrainer(Path(args.bridge_dir), model=args.policy_model,
-                                     public_base_url=args.public_base_url)
+        from autoenvscaling.training.bridge import BridgeTrainer
+        trainer = BridgeTrainer(Path(args.bridge_dir), model=args.policy_model,
+                                public_base_url=args.public_base_url)
     loop = SelfPlayLoop(settings, config, pool=pool, trainer=trainer, run_dir=Path(args.run_dir))
     print(f"planned trainer updates: {loop.schedule.planned_updates}")
     state = asyncio.run(loop.run())
@@ -180,8 +180,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--pool-dir", type=Path, required=True)
     p.add_argument("--run-dir", type=Path, required=True)
     p.add_argument("--steps", type=int, default=288)
-    p.add_argument("--bridge-dir", type=Path, help="Miles bridge control directory")
-    p.add_argument("--public-base-url", help="address under which sandboxes reach the Miles router")
+    p.add_argument("--bridge-dir", type=Path, help="bridge control directory of the training job")
+    p.add_argument("--public-base-url", help="address under which sandboxes reach the training job's router")
     p.add_argument("--policy-model", default="policy", help="served model name of the policy")
     p.add_argument("--fixed-endpoint", help="dry run: use this endpoint and do not train")
     p.add_argument("--harness", help="proposer harness (frontier mode)")
@@ -199,7 +199,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "run":
         if not args.fixed_endpoint and not args.bridge_dir:
-            parser.error("run needs --bridge-dir (Miles) or --fixed-endpoint (dry run)")
+            parser.error("run needs --bridge-dir (Miles or verl) or --fixed-endpoint (dry run)")
         if args.mode == FRONTIER and not (args.harness and args.model):
             parser.error("frontier mode needs --harness and --model")
     return args.fn(args)
