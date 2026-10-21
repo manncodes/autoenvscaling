@@ -100,6 +100,35 @@ aes generate --pool-dir runs/pool --out-dir runs/round0 \
 Each episode writes its Harbor task and the proposer trajectory with its admission reports and
 reward r_P, and admits the task to the pool if it passes.
 
+## TextArena Games
+
+`autoenvscaling/envs/` registers multi-player text games with
+[TextArena](https://github.com/LeonGuertler/TextArena), starting with Unstable Unicorns for 2-8
+players: be the first to gather seven Unicorns in your Stable while destroying, stealing and
+Neighing everyone else's.
+
+```bash
+uv pip install -e ".[textarena]"
+```
+
+```python
+import textarena as ta
+import autoenvscaling.envs  # registers UnstableUnicorns-v0 and -v0-short (5 Unicorns to win)
+
+env = ta.make("UnstableUnicorns-v0-train")  # or the full-history default, or -raw
+env.reset(num_players=4, seed=0)
+done = False
+while not done:
+    player_id, observation = env.get_observation()
+    done, info = env.step(agent(observation))  # "[2]": the number of one of the listed options
+rewards, game_info = env.close()  # +1 for the winner, -1 for the others
+```
+
+Every choice in the game (an action, a Neigh, a target, a discard) reaches the acting player as a
+numbered list of options, so one step is one decision. The rules engine
+(`autoenvscaling/envs/unstable_unicorns/game.py`) is a plain Python generator with no TextArena
+dependency, and each card's effect is a single expression in the card table in `cards.py`.
+
 ## Reproducing the Paper
 
 Every table and figure maps to a launcher under `cmd/`; [`docs/experiments.md`](docs/experiments.md)
@@ -121,7 +150,7 @@ yet.
 
 ```
 autoenvscaling/   the package: proposer, sandbox, validation, calibration, rewards, pool,
-                  pipeline, selfplay, training, evals, baselines, trajectories
+                  pipeline, selfplay, training, evals, baselines, trajectories, envs
 skills/           the auto_env_scaling proposer skill and cross-domain references
 docker/proposer/  the proposer image and the tools available inside the sandbox
 rubrics/          the Terminal-Bench task-implementation rubric used by `harbor check`

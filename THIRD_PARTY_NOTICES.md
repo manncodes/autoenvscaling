@@ -30,6 +30,20 @@ components below; preserve their notices and licence files when redistributing m
 - The `ask_human` server is taken from a local checkout of the upstream repository and hash-pinned;
   it is not included here. Check the upstream licence before redistributing it.
 
+## TextArena
+
+- Upstream: <https://github.com/LeonGuertler/TextArena>
+- License: MIT
+- Not included: an optional dependency (`.[textarena]`) with which `autoenvscaling/envs/`
+  registers its games.
+
+## Unstable Unicorns
+
+- Unstable Unicorns is a card game by Unstable Games, who own its name and trademarks.
+- `autoenvscaling/envs/unstable_unicorns/` is an unofficial implementation of a subset of its rules
+  for research. Card names refer to the original game; the card texts are our own descriptions of
+  what the implementation does. No artwork or rulebook text is included.
+
 ## Data and external dependencies
 
 - Tmax tasks are converted from [allenai/TMax-15K](https://huggingface.co/datasets/allenai/TMax-15K)
